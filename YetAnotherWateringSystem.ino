@@ -9,7 +9,50 @@
 #define DHTTYPE DHT22
 
 DHT dht(DHTPIN, DHTTYPE);
+int wateringAt = 7 * 60 * 60; // Seconds since midnight.
+int lowerThreshold = 20;
 BlynkTimer timer;
+
+BLYNK_CONNECTED() {
+  // Request Blynk server to re-send latest values.
+  Blynk.syncVirtual(V20, V50, V51, V60, V61, V62, V63);
+}
+
+/*
+   Blynk virtual pins:
+    V0: Air temperature from DHT22;
+    V1: Air humidity from DHT22;
+    V2: Computed dew point;
+    V11: Soil moisture of irrigation line 1;
+    V12: Soil moisture of irrigation line 2;
+    V13: Soil moisture of irrigation line 3;
+    V14: Soil moisture of irrigation line 4;
+    V20: Button used to force watering;
+    V50: Watering time;
+    V51: Soil moisture lower threshold; an irrigation is triggered when soil moisture is below the threshold at the irrigation time;
+    V60: Target soil moisture for irrigation line 1; the irrigations stops when reachs the soil moisture target.
+    V61: Target soil moisture for irrigation line 2;
+    V62: Target soil moisture for irrigation line 3;
+    V63: Target soil moisture for irrigation line 4;
+*/
+
+// Controllers.
+BLYNK_WRITE(V20) {
+  // It works even if the ESP is temporary offline.
+  int forceWatering = param.asInt();
+  if (forceWatering == 1) {
+    waterNow();
+    Blynk.virtualWrite(V20, 0);
+  }
+}
+
+// Settings.
+BLYNK_WRITE(V50) {
+  wateringAt = param.asInt();
+}
+BLYNK_WRITE(V51) {
+  lowerThreshold = param.asInt();
+}
 
 void setup(void) {
   // Switch off built-in led.
@@ -27,17 +70,16 @@ void setup(void) {
   dht.begin();
 
   // WiFi.
-  setupWiFiOrEmergencyWatering();
-  
+  connectToWiFiOrDoEmergencyWatering();
+
   // Blynk.
- setupBlynkOrEmergencyWatering();
-  
+  connectToBlynkOrDoEmergencyWatering();
+
   // OTA.
   ArduinoOTA.setHostname(SECRET_WATERING_SYSTEM_HOSTNAME);
   ArduinoOTA.begin();
 
-  // Setup a function to be called every second.
-  timer.setInterval(1000L, readAirTemperatureAndHumidity);
+  timer.setInterval(5000L, readAirTemperatureAndHumidity);
 }
 
 void loop(void) {
@@ -53,7 +95,7 @@ void loop(void) {
   }
 */
 
-void setupWiFiOrEmergencyWatering() {
+void connectToWiFiOrDoEmergencyWatering() {
   WiFi.hostname(SECRET_WATERING_SYSTEM_HOSTNAME);
   WiFi.mode(WIFI_STA);
   WiFi.begin(SECRET_SSID, SECRET_PASSWORD);
@@ -66,8 +108,8 @@ void setupWiFiOrEmergencyWatering() {
   }
 }
 
-void setupBlynkOrEmergencyWatering() {
-   Blynk.config(SECRET_WATERING_SYSTEM_BLYNK_TOKEN);
+void connectToBlynkOrDoEmergencyWatering() {
+  Blynk.config(SECRET_WATERING_SYSTEM_BLYNK_TOKEN);
   float timeout = millis() + 15000;
   while (Blynk.connect() == false && (timeout - millis() > 0)) {}
 
@@ -77,13 +119,16 @@ void setupBlynkOrEmergencyWatering() {
 }
 
 void emergencyWateringAndRestart() {
-  Serial.println("Connection to Internet failed! Emergency watering if needed...");
-  
-  // Do an emergency watering, even if the board is disconnected from the Internet.
+  Serial.println("Do an emergency watering, even if the board is disconnected from the Internet.");
+  waterNow();
 
   Serial.println("Restart in 1 hour.");
   delay(60 * 60 * 1000);
   ESP.restart();
+}
+
+bool waterNow() {
+  return true;
 }
 
 void readAirTemperatureAndHumidity() {
