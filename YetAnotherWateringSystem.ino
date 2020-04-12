@@ -1,47 +1,30 @@
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
+#include <BlynkSimpleEsp8266.h>
 #include <ArduinoOTA.h>
 #include <DHT.h>
+#include <arduino_secrets.h> // Define your SSID, password and Blynk token here.
 
 // Settings.
-#define DHTPIN D3 // ESP8266 GPIO pin to use. Using D3, since it haves a build-in pull-up resistor in the D1 mini.
+#define DHTPIN D3 // GPIO pin to use. Using D3, since it haves a build-in pull-up resistor in the D1 mini board.
 #define DHTTYPE DHT22
-const char* ssid = "Vodafone-66381823";
-const char* password = "supergigi12345678901234567890";
-const char* hostname = "terrazzo";
-//TODO test https://github.com/tzapu/WiFiManager#wifimanager ?
 
-MDNSResponder mdns;
-ESP8266WebServer server(80);
 DHT dht(DHTPIN, DHTTYPE);
+BlynkTimer timer;
 
 void setup(void) {
+  // Switch off built-in led.
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
   // Serial.
   Serial.begin(115200);
-  Serial.println("Booting");
 
-  // Time.
+  // Set timezone and NTP time sync.
   configTime(0, 0, "pool.ntp.org");
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 0);
 
   // WiFi.
-  WiFi.hostname(hostname);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Connection Failed! Rebooting...");
-    delay(15000);
-    ESP.restart();
-  }
-  Serial.printf("\nConnected to %s, IP address %s\n", ssid, WiFi.localIP().toString().c_str());
-
-  // mDNS.
-  if (mdns.begin(hostname, WiFi.localIP()))
-    Serial.println("MDNS responder started");
+  Blynk.begin(SECRET_WATERING_SYSTEM_BLYNK_TOKEN, SECRET_SSID, SECRET_PASSWORD);
 
   // OTA.
   ArduinoOTA.onError([](ota_error_t error) {
@@ -52,35 +35,28 @@ void setup(void) {
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
   });
-  ArduinoOTA.setHostname(hostname);
+  ArduinoOTA.setHostname(SECRET_WATERING_SYSTEM_HOSTNAME);
   ArduinoOTA.begin();
-
-  //server.on("/ir", handleIr);
-  server.onNotFound(handleNotFound);
-
-  server.begin();
-  Serial.println("HTTP server started");
 
   // DHT.
   dht.begin();
+
+  // Setup a function to be called every second.
+  timer.setInterval(1000L, readTemperatureAndHumidity);
 }
 
 void loop(void) {
   ArduinoOTA.handle();
-  readTemperatureAndHumidity();
-  printTime();
-  delay(2000);
-  //server.handleClient();
+  Blynk.run();
+  timer.run();
 }
 
-void handleNotFound() {
-  server.send(404, "text/plain", "Not found");
-}
-
-void printTime() {
+/*
+  void printTime() {
   time_t tnow = time(nullptr);
   Serial.print(String(ctime(&tnow)));
-}
+  }
+*/
 
 void readTemperatureAndHumidity() {
   float t = dht.readTemperature();
@@ -92,6 +68,11 @@ void readTemperatureAndHumidity() {
   double dewPoint = computeDewPoint(t, h);
 
   Serial.printf("Temperature: %f, Humidity: %f%%, Dew point: %f\n", t, h, dewPoint);
+
+  // Update Blynk.
+  Blynk.virtualWrite(V1, t);
+  Blynk.virtualWrite(V2, h);
+  Blynk.virtualWrite(V3, dewPoint);
 }
 
 // reference: http://wahiduddin.net/calc/density_algorithms.htm
