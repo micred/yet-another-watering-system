@@ -23,26 +23,21 @@ void setup(void) {
   configTime(0, 0, "pool.ntp.org");
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 0);
 
-  // WiFi.
-  Blynk.begin(SECRET_WATERING_SYSTEM_BLYNK_TOKEN, SECRET_SSID, SECRET_PASSWORD);
-
-  // OTA.
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
-  });
-  ArduinoOTA.setHostname(SECRET_WATERING_SYSTEM_HOSTNAME);
-  ArduinoOTA.begin();
-
   // DHT.
   dht.begin();
 
+  // WiFi.
+  setupWiFiOrEmergencyWatering();
+  
+  // Blynk.
+ setupBlynkOrEmergencyWatering();
+  
+  // OTA.
+  ArduinoOTA.setHostname(SECRET_WATERING_SYSTEM_HOSTNAME);
+  ArduinoOTA.begin();
+
   // Setup a function to be called every second.
-  timer.setInterval(1000L, readTemperatureAndHumidity);
+  timer.setInterval(1000L, readAirTemperatureAndHumidity);
 }
 
 void loop(void) {
@@ -58,7 +53,40 @@ void loop(void) {
   }
 */
 
-void readTemperatureAndHumidity() {
+void setupWiFiOrEmergencyWatering() {
+  WiFi.hostname(SECRET_WATERING_SYSTEM_HOSTNAME);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SECRET_SSID, SECRET_PASSWORD);
+  float timeout = millis() + 15000;
+  while (WiFi.status() != WL_CONNECTED && (timeout - millis() > 0)) {
+    delay(1000);
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    emergencyWateringAndRestart();
+  }
+}
+
+void setupBlynkOrEmergencyWatering() {
+   Blynk.config(SECRET_WATERING_SYSTEM_BLYNK_TOKEN);
+  float timeout = millis() + 15000;
+  while (Blynk.connect() == false && (timeout - millis() > 0)) {}
+
+  if (!Blynk.connected()) {
+    emergencyWateringAndRestart();
+  }
+}
+
+void emergencyWateringAndRestart() {
+  Serial.println("Connection to Internet failed! Emergency watering if needed...");
+  
+  // Do an emergency watering, even if the board is disconnected from the Internet.
+
+  Serial.println("Restart in 1 hour.");
+  delay(60 * 60 * 1000);
+  ESP.restart();
+}
+
+void readAirTemperatureAndHumidity() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
   if (isnan(h) || isnan(t) ) {
