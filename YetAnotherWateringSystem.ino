@@ -1,23 +1,3 @@
-#include <ESP8266WiFi.h>
-#include <BlynkSimpleEsp8266.h>
-#include <ArduinoOTA.h>
-#include <DHT.h>
-#include <arduino_secrets.h> // Define your SSID, password and Blynk token here.
-
-// Settings.
-#define DHTPIN D3 // GPIO pin to use. Using D3, since it haves a build-in pull-up resistor in the D1 mini board.
-#define DHTTYPE DHT22
-
-DHT dht(DHTPIN, DHTTYPE);
-int wateringAt = 7 * 60 * 60; // Seconds since midnight.
-int lowerThreshold = 20;
-BlynkTimer timer;
-
-BLYNK_CONNECTED() {
-  // Request Blynk server to re-send latest values.
-  Blynk.syncVirtual(V20, V50, V51, V60, V61, V62, V63);
-}
-
 /*
    Blynk virtual pins:
     V0: Air temperature from DHT22;
@@ -36,7 +16,44 @@ BLYNK_CONNECTED() {
     V63: Target soil moisture for irrigation line 4;
 */
 
-// Controllers.
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <ArduinoOTA.h>
+#include <DHT.h>
+#include <arduino_secrets.h> // Define inside arduino_secrets.h your SSID, password and Blynk token.
+
+typedef struct {
+  bool enabled;
+  uint8_t soilMoistureSensorPin;
+  uint8_t valvePin;
+  uint8_t upperThreshold;
+} irrigationLine;
+
+// Settings.
+#define DHTTYPE DHT22
+#define DHTPIN D3 // GPIO pin where DHT is connected. Use a pull-up resistor if your board doesn't have an internal one.
+uint8_t wateringAt = 7 * 60 * 60; // Seconds since midnight.
+uint8_t lowerThreshold = 20;
+
+irrigationLine irrigationLines[] {
+  // {enabled, soilMoistureSensorPin, valvePin, upperThreshold}
+  {true, D4, D8, 50},
+  {true, D5, D8, 50},
+  {true, D6, D8, 50},
+  {true, D7, D8, 50}
+};
+
+BLYNK_CONNECTED() {
+  // Request Blynk server to re-send latest values.
+  Blynk.syncVirtual(
+    V20,               // Button used to force watering;
+    V50,               // Watering time;
+    V51,               // Soil moisture lower threshold;
+    V60, V61, V62, V63 // Target soil moisture for irrigation line 1-4
+  );
+}
+
+// Callbacks used for Blynk controllers.
 BLYNK_WRITE(V20) {
   // It works even if the ESP is temporary offline.
   int forceWatering = param.asInt();
@@ -46,18 +63,35 @@ BLYNK_WRITE(V20) {
   }
 }
 
-// Settings.
+// Callbacks used for updating settings from Blynk to ESP.
 BLYNK_WRITE(V50) {
   wateringAt = param.asInt();
 }
 BLYNK_WRITE(V51) {
   lowerThreshold = param.asInt();
 }
+BLYNK_WRITE(V60) {
+  setUpperThreshold(0, param.asInt());
+}
+BLYNK_WRITE(V61) {
+  setUpperThreshold(1, param.asInt());
+}
+BLYNK_WRITE(V62) {
+  setUpperThreshold(2, param.asInt());
+}
+BLYNK_WRITE(V63) {
+  setUpperThreshold(3, param.asInt());
+}
+
+DHT dht(DHTPIN, DHTTYPE);
+BlynkTimer timer;
 
 void setup(void) {
   // Switch off built-in led.
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
+
+  setValvesAndMoistureSensorsPinModes();
 
   // Serial.
   Serial.begin(115200);
@@ -94,6 +128,21 @@ void loop(void) {
   Serial.print(String(ctime(&tnow)));
   }
 */
+
+bool setUpperThreshold(uint8_t irrigationLineIdx, uint8_t newThreshold) {
+  if (irrigationLineIdx >= sizeof(irrigationLines)) {
+    return false;
+  }
+  irrigationLines[irrigationLineIdx].upperThreshold = newThreshold;
+  return true;
+}
+
+void setValvesAndMoistureSensorsPinModes() {
+  for (uint8_t i = 0; i < sizeof(irrigationLines) / sizeof(irrigationLine); i++) {
+    pinMode(irrigationLines[i].soilMoistureSensorPin, INPUT);
+    pinMode(irrigationLines[i].valvePin, OUTPUT);
+  }
+}
 
 void connectToWiFiOrDoEmergencyWatering() {
   WiFi.hostname(SECRET_WATERING_SYSTEM_HOSTNAME);
