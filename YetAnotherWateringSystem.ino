@@ -16,11 +16,17 @@
     V63: Target soil moisture for irrigation line 4;
 */
 
+#if defined(ESP32)
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#elif defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
+#endif
+#include <RemoteDebug.h>
 #include <ArduinoOTA.h>
 #include <DHT.h>
-#include <arduino_secrets.h> // Define inside arduino_secrets.h your SSID, password and Blynk token.
+#include <arduino_secrets.h> // Define your SSID, password, hostname and Blynk token inside arduino_secrets.h
 
 typedef struct {
   bool enabled;
@@ -31,16 +37,17 @@ typedef struct {
 
 // Settings.
 #define DHTTYPE DHT22
-#define DHTPIN D3 // GPIO pin where DHT is connected. Use a pull-up resistor if your board doesn't have an internal one.
+#define DHTPIN GPIO_NUM_13 // GPIO pin where DHT is connected. Use a pull-up resistor if your board doesn't have an internal one.
+#define PWSAVERPIN GPIO_NUM_32 // Enable power rail (12v/3.3v) driven by a MOSFET (used to switch off external sensors and save battery). 
 uint8_t wateringAt = 7 * 60 * 60; // Seconds since midnight.
 uint8_t lowerThreshold = 20;
 
 irrigationLine irrigationLines[] {
   // {enabled, soilMoistureSensorPin, valvePin, upperThreshold}
-  {true, D4, D8, 50},
-  {true, D5, D8, 50},
-  {true, D6, D8, 50},
-  {true, D7, D8, 50}
+  {true, GPIO_NUM_12, GPIO_NUM_16, 50},
+  {true, GPIO_NUM_14, GPIO_NUM_17, 50},
+  {true, GPIO_NUM_27, GPIO_NUM_5, 50},
+  {true, GPIO_NUM_26, GPIO_NUM_18, 50}
 };
 
 BLYNK_CONNECTED() {
@@ -83,6 +90,7 @@ BLYNK_WRITE(V63) {
   setUpperThreshold(3, param.asInt());
 }
 
+RemoteDebug Debug;
 DHT dht(DHTPIN, DHTTYPE);
 BlynkTimer timer;
 
@@ -91,14 +99,13 @@ void setup(void) {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
+  pinMode(PWSAVERPIN, OUTPUT);
+  digitalWrite(PWSAVERPIN, HIGH);
+
   setValvesAndMoistureSensorsPinModes();
 
   // Serial.
   Serial.begin(115200);
-
-  // Set timezone and NTP time sync.
-  configTime(0, 0, "pool.ntp.org");
-  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 0);
 
   // DHT.
   dht.begin();
@@ -109,25 +116,35 @@ void setup(void) {
   // Blynk.
   connectToBlynkOrDoEmergencyWatering();
 
+  // Remote debug.
+  Debug.begin(SECRET_GAS_SENSOR_HOSTNAME);
+  Debug.setSerialEnabled(true);
+  Debug.setResetCmdEnabled(true);
+  Debug.showColors(true);
+
   // OTA.
   ArduinoOTA.setHostname(SECRET_WATERING_SYSTEM_HOSTNAME);
   ArduinoOTA.begin();
 
+  // Set timezone and NTP time sync.
+  configTime(0, 0, "pool.ntp.org");
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 0);
+
+  //  Enable light sleep.
+  //wifi_set_sleep_type(LIGHT_SLEEP_T);
+  //https://community.blynk.cc/t/esp8266-light-sleep/13584
+
+  // Periodic jobs.
   timer.setInterval(5000L, readAirTemperatureAndHumidity);
 }
 
 void loop(void) {
+  Debug.handle();
   ArduinoOTA.handle();
   Blynk.run();
   timer.run();
+  //delay(1000);  // Put the ESP to sleep for 1s. https://community.blynk.cc/t/esp8266-light-sleep/13584
 }
-
-/*
-  void printTime() {
-  time_t tnow = time(nullptr);
-  Serial.print(String(ctime(&tnow)));
-  }
-*/
 
 bool setUpperThreshold(uint8_t irrigationLineIdx, uint8_t newThreshold) {
   if (irrigationLineIdx >= sizeof(irrigationLines)) {
@@ -145,7 +162,11 @@ void setValvesAndMoistureSensorsPinModes() {
 }
 
 void connectToWiFiOrDoEmergencyWatering() {
+  #if defined(ESP32)
+  WiFi.setHostname(SECRET_WATERING_SYSTEM_HOSTNAME);
+  #elif defined(ESP8266)
   WiFi.hostname(SECRET_WATERING_SYSTEM_HOSTNAME);
+  #endif
   WiFi.mode(WIFI_STA);
   WiFi.begin(SECRET_SSID, SECRET_PASSWORD);
   float timeout = millis() + 15000;
@@ -168,10 +189,10 @@ void connectToBlynkOrDoEmergencyWatering() {
 }
 
 void emergencyWateringAndRestart() {
-  Serial.println("Do an emergency watering, even if the board is disconnected from the Internet.");
+  Debug.println("Do an emergency watering, even if the board is disconnected from the Internet.");
   waterNow();
 
-  Serial.println("Restart in 1 hour.");
+  Debug.println("Restart in 1 hour.");
   delay(60 * 60 * 1000);
   ESP.restart();
 }
@@ -184,12 +205,12 @@ void readAirTemperatureAndHumidity() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
   if (isnan(h) || isnan(t) ) {
-    Serial.println(F("Failed to read from DHT sensor!"));
+    Debug.println(F("Failed to read from DHT sensor!"));
     return;
   }
   double dewPoint = computeDewPoint(t, h);
 
-  Serial.printf("Temperature: %f, Humidity: %f%%, Dew point: %f\n", t, h, dewPoint);
+  Debug.printf("Temperature: %f, Humidity: %f%%, Dew point: %f\n", t, h, dewPoint);
 
   // Update Blynk.
   Blynk.virtualWrite(V1, t);
