@@ -7,14 +7,25 @@
     V12: Soil moisture of irrigation line 2;
     V13: Soil moisture of irrigation line 3;
     V14: Soil moisture of irrigation line 4;
-    V20: Button used to force watering;
+    V21: Slider used to force watering line 1;
+    V22: Slider used to force watering line 2;
+    V23: Slider used to force watering line 3;
+    V24: Slider used to force watering line 4;      
     V50: Watering time;
-    V51: Soil moisture lower threshold; an irrigation is triggered when soil moisture is below the threshold at the irrigation time;
+    V51: Soil moisture upper threshold; an irrigation is stopped when soil moisture is above the threshold;
     V60: Target soil moisture for irrigation line 1; the irrigations stops when reachs the soil moisture target.
-    V61: Target soil moisture for irrigation line 2;
-    V62: Target soil moisture for irrigation line 3;
-    V63: Target soil moisture for irrigation line 4;
-*/
+    V61: Target soil moisture for irrigation line 2; the irrigations stops when reachs the soil moisture target.
+    V62: Target soil moisture for irrigation line 3; the irrigations stops when reachs the soil moisture target.
+    V63: Target soil moisture for irrigation line 4; the irrigations stops when reachs the soil moisture target.
+ */
+
+/*
+   TODO:
+    - Orario fa enqueue;
+    - settings per tempo predefinito per ogni vaso.
+    - emergencyWateringAndRestart.
+    - Alexa waterNow 5 (with enqueue support).
+ */
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -29,44 +40,76 @@
 #include <arduino_secrets.h> // Define your SSID, password, hostname and Blynk token inside arduino_secrets.h
 
 typedef struct {
-  bool enabled;
+  bool enabled; //TODO: not used.
   uint8_t soilMoistureSensorPin;
   uint8_t valvePin;
-  uint8_t upperThreshold;
+  uint8_t blynkVirtualPin;
+  uint8_t lowerThreshold;
+  bool enqueudForWatering;
+  uint32_t timer;
 } irrigationLine;
 
 // Settings.
 #define DHTTYPE DHT22
-#define DHTPIN GPIO_NUM_13 // GPIO pin where DHT is connected. Use a pull-up resistor if your board doesn't have an internal one.
+#define DHTPIN GPIO_NUM_33 // GPIO pin where DHT is connected. Use a pull-up resistor if your board doesn't have an internal one.
 #define PWSAVERPIN GPIO_NUM_32 // Enable power rail (12v/3.3v) driven by a MOSFET (used to switch off external sensors and save battery). 
-uint8_t wateringAt = 7 * 60 * 60; // Seconds since midnight.
-uint8_t lowerThreshold = 20;
+uint32_t wateringAt = 7 * 60 * 60; // Seconds since midnight.
+bool soilMoistureSensorEnabled = false;
+uint8_t upperThreshold = 20;
 
 irrigationLine irrigationLines[] {
-  // {enabled, soilMoistureSensorPin, valvePin, upperThreshold}
-  {true, GPIO_NUM_12, GPIO_NUM_16, 50},
-  {true, GPIO_NUM_14, GPIO_NUM_17, 50},
-  {true, GPIO_NUM_27, GPIO_NUM_5, 50},
-  {true, GPIO_NUM_26, GPIO_NUM_18, 50}
+  // {enabled, soilMoistureSensorPin, valvePin, blynkVirtualPin, lowerThreshold, enqueudForWatering, timer}
+  {true, GPIO_NUM_12, GPIO_NUM_23, V11, 50, false, 0},
+  {true, GPIO_NUM_27, GPIO_NUM_22, V12, 50, false, 0},
+  {true, GPIO_NUM_14, GPIO_NUM_21, V13, 50, false, 0}
+  //{true, GPIO_NUM_13, GPIO_NUM_19, V14, 50, false, 0}
 };
 
 BLYNK_CONNECTED() {
   // Request Blynk server to re-send latest values.
   Blynk.syncVirtual(
-    V20,               // Button used to force watering;
-    V50,               // Watering time;
-    V51,               // Soil moisture lower threshold;
-    V60, V61, V62, V63 // Target soil moisture for irrigation line 1-4
+    V21, V22, V23, V24, // Slider used to force watering;
+    V50,                // Watering time;
+    V51,                // Soil moisture lower threshold;
+    V60, V61, V62, V63  // Target soil moisture for irrigation line 1-4
   );
 }
 
 // Callbacks used for Blynk controllers.
-BLYNK_WRITE(V20) {
+BLYNK_WRITE(V21) {
   // It works even if the ESP is temporary offline.
   int forceWatering = param.asInt();
-  if (forceWatering == 1) {
-    waterNow();
-    Blynk.virtualWrite(V20, 0);
+  if (forceWatering != 0) {
+    irrigationLines[0].enqueudForWatering = true;
+    irrigationLines[0].timer = forceWatering;
+    Blynk.virtualWrite(V21, 0);
+  }
+}
+BLYNK_WRITE(V22) {
+  // It works even if the ESP is temporary offline.
+  int forceWatering = param.asInt();
+  if (forceWatering != 0) {
+    irrigationLines[1].enqueudForWatering = true;
+    irrigationLines[1].timer = forceWatering;
+    Blynk.virtualWrite(V22, 0);
+  }
+}
+BLYNK_WRITE(V23) {
+  // It works even if the ESP is temporary offline.
+  int forceWatering = param.asInt();
+  if (forceWatering != 0) {
+    irrigationLines[2].enqueudForWatering = true;
+    irrigationLines[2].timer = forceWatering;
+    Blynk.virtualWrite(V23, 0);
+  }
+}
+BLYNK_WRITE(V24) {
+  // It works even if the ESP is temporary offline.
+  int forceWatering = param.asInt();
+  if (forceWatering != 0) {
+    irrigationLines[3].enqueudForWatering = true;
+    irrigationLines[3].timer = forceWatering;
+    Blynk.virtualWrite(V24, 0);
   }
 }
 
@@ -75,19 +118,19 @@ BLYNK_WRITE(V50) {
   wateringAt = param.asInt();
 }
 BLYNK_WRITE(V51) {
-  lowerThreshold = param.asInt();
+  upperThreshold = param.asInt();
 }
 BLYNK_WRITE(V60) {
-  setUpperThreshold(0, param.asInt());
+  setLowerThreshold(0, param.asInt());
 }
 BLYNK_WRITE(V61) {
-  setUpperThreshold(1, param.asInt());
+  setLowerThreshold(1, param.asInt());
 }
 BLYNK_WRITE(V62) {
-  setUpperThreshold(2, param.asInt());
+  setLowerThreshold(2, param.asInt());
 }
 BLYNK_WRITE(V63) {
-  setUpperThreshold(3, param.asInt());
+  setLowerThreshold(3, param.asInt());
 }
 
 RemoteDebug Debug;
@@ -99,8 +142,9 @@ void setup(void) {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
+  // Switch off power saving rail.
   pinMode(PWSAVERPIN, OUTPUT);
-  digitalWrite(PWSAVERPIN, HIGH);
+  digitalWrite(PWSAVERPIN, LOW);
 
   setValvesAndMoistureSensorsPinModes();
 
@@ -117,7 +161,7 @@ void setup(void) {
   connectToBlynkOrDoEmergencyWatering();
 
   // Remote debug.
-  Debug.begin(SECRET_GAS_SENSOR_HOSTNAME);
+  Debug.begin(SECRET_WATERING_SYSTEM_HOSTNAME);
   Debug.setSerialEnabled(true);
   Debug.setResetCmdEnabled(true);
   Debug.showColors(true);
@@ -135,7 +179,10 @@ void setup(void) {
   //https://community.blynk.cc/t/esp8266-light-sleep/13584
 
   // Periodic jobs.
-  timer.setInterval(5000L, readAirTemperatureAndHumidity);
+  timer.setInterval(60000L, readAirTemperatureAndHumidity);
+  timer.setInterval(60000L, readAllSoilMoisture);
+  timer.setInterval(10000L, checkEnqueuedForWatering);
+  //timer.setInterval(5000L, openOrCloseValve); // TODO: temp.
 }
 
 void loop(void) {
@@ -143,14 +190,17 @@ void loop(void) {
   ArduinoOTA.handle();
   Blynk.run();
   timer.run();
-  //delay(1000);  // Put the ESP to sleep for 1s. https://community.blynk.cc/t/esp8266-light-sleep/13584
+  // Put the ESP to sleep.
+  //delay(30000);
+  //esp_sleep_enable_timer_wakeup(1 * 1000000);
+  //esp_light_sleep_start();
 }
 
-bool setUpperThreshold(uint8_t irrigationLineIdx, uint8_t newThreshold) {
+bool setLowerThreshold(uint8_t irrigationLineIdx, uint8_t newThreshold) {
   if (irrigationLineIdx >= sizeof(irrigationLines)) {
     return false;
   }
-  irrigationLines[irrigationLineIdx].upperThreshold = newThreshold;
+  irrigationLines[irrigationLineIdx].lowerThreshold = newThreshold;
   return true;
 }
 
@@ -190,20 +240,86 @@ void connectToBlynkOrDoEmergencyWatering() {
 
 void emergencyWateringAndRestart() {
   Debug.println("Do an emergency watering, even if the board is disconnected from the Internet.");
-  waterNow();
+  //waterNow(); // enqueue time pianificato?
 
   Debug.println("Restart in 1 hour.");
   delay(60 * 60 * 1000);
   ESP.restart();
 }
 
-bool waterNow() {
-  return true;
+void checkEnqueuedForWatering() {
+  for (uint8_t i = 0; i < sizeof(irrigationLines) / sizeof(irrigationLine); i++) {
+    if (irrigationLines[i].enqueudForWatering) {
+      if (soilMoistureSensorEnabled) {
+        //TODO: to be implemented;
+      } else {
+        openValve(i, irrigationLines[i].timer * 60);
+      }
+      irrigationLines[i].enqueudForWatering = false;
+      irrigationLines[i].timer = 0;
+    }
+  }
+}
+
+/*
+void waterNow() {
+  float sensorValue;
+  for (uint8_t i = 0; i < sizeof(irrigationLines) / sizeof(irrigationLine); i++) {
+    sensorValue = readSoilMoisture(i);
+
+    //openValve(i, 10);
+    if (sensorValue < irrigationLines[i].lowerThreshold) {
+      // TODO water until sensorValue < upperThreshold
+    } 
+  }
+}*/
+
+void readAllSoilMoisture() {
+  if (soilMoistureSensorEnabled) {
+    for (uint8_t i = 0; i < sizeof(irrigationLines) / sizeof(irrigationLine); i++) {
+      readSoilMoisture(i); 
+    }
+  }
+}
+
+float readSoilMoisture(uint8_t irrigationLineIdx) {
+  if (irrigationLineIdx >= sizeof(irrigationLines) || !soilMoistureSensorEnabled) {
+    return false;
+  }
+  // Read from sensor.
+  float sensorValue = 0;
+  for (int i = 0; i <= 100; i++) { 
+    sensorValue = sensorValue + analogRead(irrigationLines[irrigationLineIdx].soilMoistureSensorPin); 
+    delay(1); 
+  } 
+  sensorValue = sensorValue/100.0; 
+  Debug.printf("Soil moisture sensor %i: %f\n", irrigationLineIdx, sensorValue);
+  
+  // Update Blynk.
+  Blynk.virtualWrite(irrigationLines[irrigationLineIdx].blynkVirtualPin, sensorValue);
+
+  return sensorValue;
+}
+
+bool openValve(uint8_t irrigationLineIdx, uint32_t irrigationTimer) {
+  if (irrigationLineIdx >= sizeof(irrigationLines)) {
+    return false;
+  }
+  // Open the valve.
+  Debug.printf("Opening valve %i. Watering for %i s.\n", irrigationLineIdx, irrigationTimer);
+  digitalWrite(irrigationLines[irrigationLineIdx].valvePin, HIGH);
+  delay(irrigationTimer * 1000);
+  Debug.printf("Closing valve %i.\n", irrigationLineIdx);
+  digitalWrite(irrigationLines[irrigationLineIdx].valvePin, LOW);
 }
 
 void readAirTemperatureAndHumidity() {
+  digitalWrite(PWSAVERPIN, HIGH);
+  delay(2000); // Warm-up: sampling rate is 0.5Hz.
   float t = dht.readTemperature();
   float h = dht.readHumidity();
+  digitalWrite(PWSAVERPIN, LOW);
+
   if (isnan(h) || isnan(t) ) {
     Debug.println(F("Failed to read from DHT sensor!"));
     return;
